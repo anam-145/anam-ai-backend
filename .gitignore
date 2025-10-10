@@ -36,6 +36,9 @@ out/
 ### VS Code ###
 .vscode/
 
+### Claude Code ###
+.claude/
+
 ### 추가
 /src/main/resources/*.yml
 /src/main/resources/keystore.p12
