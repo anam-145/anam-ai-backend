@@ -11,10 +11,7 @@ import org.springframework.http.HttpStatus;
 @AllArgsConstructor
 public enum CommonSuccessStatuts implements BaseCode {
 
-    _INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON_500", "서버 에러, 관리자에게 문의 바랍니다."),
-    _BAD_REQUEST(HttpStatus.BAD_REQUEST, "COMMON_400", "잘못된 요청입니다."),
-    _UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "COMMON_401", "인증이 필요합니다."),
-    _FORBIDDEN(HttpStatus.FORBIDDEN, "COMMON_403", "금지된 요청입니다."),
+    _OK(HttpStatus.OK, "COMMON200", "성공입니다."),
     ;
 
     private final HttpStatus httpStatus;
@@ -23,12 +20,21 @@ public enum CommonSuccessStatuts implements BaseCode {
 
 
     @Override
-    public ReasonDTO getReason() {
-        return null;
+    public ReasonDTO getReason() { //비즈니스 로직에서 responseBody에 사용 -> HttpStaus코드 필요 x
+        return ReasonDTO.builder()
+                .message(message)
+                .code(code)
+                .isSuccess(true)
+                .build();
     }
 
     @Override
     public ReasonDTO getReasonHttpStatus() {
-        return null;
+        return ReasonDTO.builder()
+                .message(message)
+                .code(code)
+                .isSuccess(true)
+                .httpStatus(httpStatus)
+                .build();
     }
 }
