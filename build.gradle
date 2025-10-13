@@ -33,6 +33,21 @@ dependencies {
 	// Swagger (SpringDoc OpenAPI)
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
 
+	// AI Guide System Dependencies
+	// Kotlin Compiler for AST parsing
+	implementation 'org.jetbrains.kotlin:kotlin-compiler-embeddable:1.9.22'
+	implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.22'
+
+	// OpenAI API Client
+	implementation 'com.theokanning.openai-gpt3-java:service:0.18.2'
+
+	// Apache Commons Compress for ZIP handling
+	implementation 'org.apache.commons:commons-compress:1.26.0'
+
+	// JSON Processing
+	implementation 'com.fasterxml.jackson.core:jackson-databind'
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
 	compileOnly 'org.projectlombok:lombok'
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	runtimeOnly 'com.mysql:mysql-connector-j'
