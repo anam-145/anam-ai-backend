@@ -14,8 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -26,6 +25,7 @@ public class ZipExtractorServiceImpl implements ZipExtractorService {
 
     private static final long MAX_ZIP_SIZE = 50 * 1024 * 1024; // 최대 ZIP 파일 크기 (50MB), DoS 공격 방지용
     private static final String KOTLIN_EXTENSION = ".kt"; // Kotlin 소스 파일 확장자
+    private static final String HTML_EXTENSION = ".html"; // HTML 파일 확장자
 
     /**
      * ZIP 파일에서 모든 Kotlin 소스 파일을 추출하는 메인 메서드
@@ -153,15 +153,158 @@ public class ZipExtractorServiceImpl implements ZipExtractorService {
     private String readFileContent(InputStream inputStream) throws IOException {
         StringBuilder content = new StringBuilder(); // 파일 내용을 누적할 버퍼
 
-        try (BufferedReader reader = new BufferedReader( // 버퍼링을 통한 효율적인 읽기
-                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) { // UTF-8 인코딩 명시 (한글 주석, 문자열 처리)
+        // BufferedReader 생성하되, try-with-resources 사용 안 함
+        // ZipInputStream은 닫으면 안 되므로 수동으로 관리
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(inputStream, StandardCharsets.UTF_8)); // UTF-8 인코딩 명시
 
-            String line; // 한 줄씩 읽어온 텍스트
-            while ((line = reader.readLine()) != null) { // 파일 끝까지 반복
-                content.append(line).append("\n"); // 줄바꿈 문자 추가 (readLine은 줄바꿈 제거하므로 복원)
-            }
-        } // try-with-resources로 자동 리소스 해제 (reader 자동 close)
+        String line; // 한 줄씩 읽어온 텍스트
+        while ((line = reader.readLine()) != null) { // 파일 끝까지 반복
+            content.append(line).append("\n"); // 줄바꿈 문자 추가
+        }
+        // reader를 닫지 않음! ZipInputStream이 관리함
 
         return content.toString(); // 누적된 전체 파일 내용 반환
+    }
+
+    /**
+     * ZIP 파일에서 모든 HTML 파일을 추출하는 메서드
+     * JavaScript/HTML 기반 MiniApp을 분석하여 .html 파일만 추출한다.
+     * 추출된 파일은 이후 HTMLParser로 전달되어 UI 요소 정보로 변환된다.
+     *
+     * @param zipFile 업로드된 ZIP 파일
+     * @return 추출된 HTML 파일 목록
+     * @throws InvalidZipFileException 유효하지 않은 ZIP 파일인 경우
+     * @throws ZipExtractionException ZIP 파일 처리 중 오류 발생 시
+     */
+    @Override
+    public List<KotlinFileContentDTO> extractHtmlFiles(MultipartFile zipFile) {
+        validateZipFile(zipFile); // 1단계: ZIP 파일 유효성 검사
+
+        List<KotlinFileContentDTO> htmlFiles = new ArrayList<>();
+
+        // 2단계: ZIP 파일을 열고 내부 엔트리들을 순회하며 처리
+        try (InputStream inputStream = zipFile.getInputStream();
+             ZipInputStream zipInputStream = new ZipInputStream(inputStream, StandardCharsets.UTF_8)) {
+
+            ZipEntry entry;
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+
+                if (shouldProcessHtmlEntry(entry)) { // 3단계: .html 파일인지 체크
+                    String content = readFileContent(zipInputStream); // 4단계: 파일 내용을 문자열로 읽기
+
+                    // 5단계: DTO 객체로 변환하여 리스트에 추가
+                    // DTO 이름은 KotlinFileContentDTO이지만 HTML 파일 정보도 동일 구조로 저장 가능
+                    htmlFiles.add(KotlinFileContentDTO.builder()
+                            .fileName(entry.getName()) // 파일 경로 (예: pages/index/index.html)
+                            .content(content) // HTML 파일 내용
+                            .fileSize(content.getBytes(StandardCharsets.UTF_8).length)
+                            .build());
+
+                    log.debug("Extracted HTML file: {} ({}bytes)", entry.getName(), content.length());
+                }
+
+                zipInputStream.closeEntry();
+            }
+
+        } catch (IOException e) {
+            log.error("Failed to extract ZIP file: {}", zipFile.getOriginalFilename(), e);
+            throw new ZipExtractionException(CommonErrorStatus.ZIP_EXTRACTION_FAILED);
+        }
+
+        if (htmlFiles.isEmpty()) { // ZIP 내에 HTML 파일이 하나도 없는 경우
+            log.warn("No HTML files found in ZIP: {}", zipFile.getOriginalFilename());
+            throw new ZipExtractionException(CommonErrorStatus.NO_HTML_FILES_FOUND);
+        }
+
+        log.info("Successfully extracted {} HTML files from ZIP: {}",
+                htmlFiles.size(), zipFile.getOriginalFilename());
+        return htmlFiles;
+    }
+
+    /**
+     * ZIP 엔트리가 HTML 파일 처리 대상인지 판단하는 필터 메서드
+     *
+     * @param entry ZIP 파일 내부의 엔트리
+     * @return 처리 대상이면 true, 제외 대상이면 false
+     */
+    private boolean shouldProcessHtmlEntry(ZipEntry entry) {
+        if (entry.isDirectory()) // 디렉토리는 제외
+            return false;
+
+        String name = entry.getName();
+
+        if (!name.endsWith(HTML_EXTENSION)) // .html 확장자만 처리
+            return false;
+
+        if (name.contains("/build/") || name.contains("/.gradle/") || name.contains("/node_modules/")) {
+            log.debug("Skipping build artifact or dependency: {}", name); // 빌드 산출물 및 node_modules 제외
+            return false;
+        }
+
+        if (name.contains("..")) { // Zip Slip 공격 방어
+            log.warn("Suspicious file path detected (Zip Slip attempt): {}", name);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * ZIP 파일에서 모든 소스 파일을 한 번에 추출 (Kotlin + HTML)
+     * 스트림을 한 번만 읽어서 Kotlin과 HTML 파일을 동시에 추출한다.
+     *
+     * @param zipFile 업로드된 ZIP 파일
+     * @return "kotlin"과 "html" 키를 가진 Map
+     */
+    @Override
+    public Map<String, List<KotlinFileContentDTO>> extractAllSourceFiles(MultipartFile zipFile) {
+        validateZipFile(zipFile);
+
+        List<KotlinFileContentDTO> kotlinFiles = new ArrayList<>();
+        List<KotlinFileContentDTO> htmlFiles = new ArrayList<>();
+
+        try (InputStream inputStream = zipFile.getInputStream();
+             ZipInputStream zipInputStream = new ZipInputStream(inputStream, StandardCharsets.UTF_8)) {
+
+            ZipEntry entry;
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+
+                // Kotlin 파일 처리
+                if (shouldProcessEntry(entry)) {
+                    String content = readFileContent(zipInputStream);
+                    kotlinFiles.add(KotlinFileContentDTO.builder()
+                            .fileName(entry.getName())
+                            .content(content)
+                            .fileSize(content.getBytes(StandardCharsets.UTF_8).length)
+                            .build());
+                    log.debug("Extracted Kotlin file: {}", entry.getName());
+                }
+                // HTML 파일 처리
+                else if (shouldProcessHtmlEntry(entry)) {
+                    String content = readFileContent(zipInputStream);
+                    htmlFiles.add(KotlinFileContentDTO.builder()
+                            .fileName(entry.getName())
+                            .content(content)
+                            .fileSize(content.getBytes(StandardCharsets.UTF_8).length)
+                            .build());
+                    log.debug("Extracted HTML file: {}", entry.getName());
+                }
+
+                zipInputStream.closeEntry();
+            }
+
+        } catch (IOException e) {
+            log.error("Failed to extract ZIP file: {}", zipFile.getOriginalFilename(), e);
+            throw new ZipExtractionException(CommonErrorStatus.ZIP_EXTRACTION_FAILED);
+        }
+
+        log.info("Successfully extracted {} Kotlin files and {} HTML files from ZIP: {}",
+                kotlinFiles.size(), htmlFiles.size(), zipFile.getOriginalFilename());
+
+        Map<String, List<KotlinFileContentDTO>> result = new HashMap<>();
+        result.put("kotlin", kotlinFiles);
+        result.put("html", htmlFiles);
+        return result;
     }
 }
