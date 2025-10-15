@@ -21,10 +21,15 @@ public enum CommonErrorStatus implements BaseErrorCode {
     ZIP_FILE_INVALID_FORMAT(HttpStatus.BAD_REQUEST, "COMMON4003", "올바른 ZIP 파일 형식이 아닙니다."),
     ZIP_EXTRACTION_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON5001", "ZIP 파일 추출 중 오류가 발생했습니다."),
     NO_KOTLIN_FILES_FOUND(HttpStatus.BAD_REQUEST, "COMMON4004", "ZIP 파일 내에 Kotlin 파일(.kt)이 없습니다."),
+    NO_HTML_FILES_FOUND(HttpStatus.BAD_REQUEST, "COMMON4006", "ZIP 파일 내에 HTML 파일(.html)이 없습니다."),
 
     // Kotlin 파싱 관련 에러
     KOTLIN_PARSING_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON5002", "Kotlin 소스 코드 파싱 중 오류가 발생했습니다."),
     INVALID_KOTLIN_SYNTAX(HttpStatus.BAD_REQUEST, "COMMON4005", "올바르지 않은 Kotlin 문법입니다."),
+
+    // HTML 파싱 관련 에러
+    HTML_PARSING_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON5003", "HTML 파일 파싱 중 오류가 발생했습니다."),
+    INVALID_HTML_SYNTAX(HttpStatus.BAD_REQUEST, "COMMON4007", "올바르지 않은 HTML 형식입니다."),
     ;
 
     private final HttpStatus httpStatus;
