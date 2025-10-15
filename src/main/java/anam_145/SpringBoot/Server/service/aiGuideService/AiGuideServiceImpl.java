@@ -2,6 +2,7 @@ package anam_145.SpringBoot.Server.service.aiGuideService;
 
 import anam_145.SpringBoot.Server.domain.aiGuide.ComposableInfo;
 import anam_145.SpringBoot.Server.repository.ComposableInfoRepository;
+import anam_145.SpringBoot.Server.service.llm.OpenAiClientService;
 import anam_145.SpringBoot.Server.web.dto.AiGuideDTO.GuideRequestDTO;
 import anam_145.SpringBoot.Server.web.dto.AiGuideDTO.GuideResponseDTO;
 import lombok.RequiredArgsConstructor;
@@ -20,7 +21,7 @@ import java.util.List;
 public class AiGuideServiceImpl implements AiGuideService {
 
     private final ComposableInfoRepository composableInfoRepository;
-    // TODO: LLM 클라이언트 추가 (OpenAI, Claude 등)
+    private final OpenAiClientService openAiClientService;
 
     @Override
     public GuideResponseDTO generateGuide(GuideRequestDTO request) {
@@ -99,14 +100,32 @@ public class AiGuideServiceImpl implements AiGuideService {
 
     /**
      * LLM 호출하여 안내 메시지 생성
-     * TODO: 실제 LLM API 연동 필요 (OpenAI, Claude 등)
+     * OpenAI API를 사용하며, API 키가 없으면 mock 응답 반환
      */
     private String callLLM(String prompt, ComposableInfo element) {
-        // TODO: 실제 LLM API 호출 로직 구현
-        // 현재는 mock 응답 반환
-        log.warn("LLM API 미구현 - mock 응답 반환");
+        // 시스템 프롬프트 정의
+        String systemPrompt = """
+                당신은 미니앱 UI 가이드 전문가입니다.
+                사용자가 미니앱을 사용할 때 UI 요소를 쉽게 찾고 사용할 수 있도록 친절하고 간결하게 안내합니다.
+                1-2문장으로 핵심만 전달하며, 존댓말을 사용합니다.
+                """;
 
-        // mock 응답 생성 로직
+        // OpenAI API 호출 시도
+        String llmResponse = openAiClientService.generateGuideMessage(systemPrompt, prompt);
+
+        // API 키가 없으면 null 반환 → mock 응답 사용
+        if (llmResponse == null) {
+            log.warn("OpenAI API 키 미설정 - mock 응답 사용");
+            return generateMockResponse(element);
+        }
+
+        return llmResponse;
+    }
+
+    /**
+     * Mock 응답 생성 (OpenAI API 키가 없을 때 사용)
+     */
+    private String generateMockResponse(ComposableInfo element) {
         String type = element.getType();
         String text = element.getText();
         String onClick = element.getOnClickCode();
