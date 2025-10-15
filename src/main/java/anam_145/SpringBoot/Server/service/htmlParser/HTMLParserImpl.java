@@ -275,25 +275,49 @@ public class HTMLParserImpl implements HTMLParser {
 
     /**
      * 요소의 ID를 추출
-     * 우선순위: id > data-testid > data-id > data-target
+     * 우선순위: id > data-testid > data-id > data-target > class 첫 번째 값 > tagName + text 조합
+     *
+     * HTML 요소의 고유 식별자를 추출한다.
+     * 프론트엔드에서 querySelector로 요소를 찾을 수 있도록 fallback 로직을 제공한다.
      */
     private String extractId(Element element) {
-        String id = element.id(); // id 속성
+        // 1순위: id 속성
+        String id = element.id();
         if (!id.isEmpty()) return id;
 
-        // data-testid 속성 (테스트 자동화용 ID)
+        // 2순위: data-testid 속성 (테스트 자동화용 ID)
         String testId = element.attr("data-testid");
         if (!testId.isEmpty()) return testId;
 
-        // data-id 속성
+        // 3순위: data-id 속성
         String dataId = element.attr("data-id");
         if (!dataId.isEmpty()) return dataId;
 
-        // data-target 속성
+        // 4순위: data-target 속성
         String target = element.attr("data-target");
         if (!target.isEmpty()) return target;
 
-        return null; // ID가 없는 경우
+        // 5순위: class 첫 번째 값 (가장 구체적인 클래스명 사용)
+        // 예: "send-btn action-btn" → "send-btn"
+        String className = element.className();
+        if (!className.isEmpty()) {
+            String firstClass = className.split("\\s+")[0];
+            return firstClass;
+        }
+
+        // 6순위: tagName + text 조합 (최후의 수단)
+        // 예: <button>Send</button> → "button_Send"
+        String tagName = element.tagName();
+        String text = element.text();
+        if (!text.isEmpty()) {
+            // 공백을 언더스코어로 치환하고 최대 20자까지만 사용
+            String sanitizedText = text.replaceAll("\\s+", "_");
+            int maxLength = Math.min(20, sanitizedText.length());
+            return tagName + "_" + sanitizedText.substring(0, maxLength);
+        }
+
+        // 모든 fallback 실패 시 null 반환
+        return null;
     }
 
     /**
