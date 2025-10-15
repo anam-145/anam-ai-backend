@@ -30,7 +30,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-web'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 
-	// Swagger (SpringDoc OpenAPI)
+	// Swagger
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.3.0'
 
 	// AI Guide System Dependencies
@@ -38,11 +38,14 @@ dependencies {
 	implementation 'org.jetbrains.kotlin:kotlin-compiler-embeddable:1.9.22'
 	implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.22'
 
-	// OpenAI API Client
+	// OpenAI
 	implementation 'com.theokanning.openai-gpt3-java:service:0.18.2'
 
 	// Apache Commons Compress for ZIP handling
 	implementation 'org.apache.commons:commons-compress:1.26.0'
+
+	// JSoup for HTML parsing
+	implementation 'org.jsoup:jsoup:1.17.2'
 
 	// JSON Processing
 	implementation 'com.fasterxml.jackson.core:jackson-databind'

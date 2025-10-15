@@ -6,6 +6,7 @@ import anam_145.SpringBoot.Server.domain.aiGuide.ScreenInfo;
 import anam_145.SpringBoot.Server.repository.ComposableInfoRepository;
 import anam_145.SpringBoot.Server.repository.MiniAppCodeIndexRepository;
 import anam_145.SpringBoot.Server.repository.ScreenInfoRepository;
+import anam_145.SpringBoot.Server.service.htmlParser.HTMLParser;
 import anam_145.SpringBoot.Server.service.kotlinASTParser.KotlinASTParser;
 import anam_145.SpringBoot.Server.service.zipExtractorService.ZipExtractorService;
 import anam_145.SpringBoot.Server.web.dto.AiGuideDTO.KotlinFileContentDTO;
@@ -29,6 +30,7 @@ public class CodeIndexingServiceImpl implements CodeIndexingService {
 
     private final ZipExtractorService zipExtractorService;
     private final KotlinASTParser kotlinASTParser;
+    private final HTMLParser htmlParser;
     private final MiniAppCodeIndexRepository miniAppCodeIndexRepository;
     private final ScreenInfoRepository screenInfoRepository;
     private final ComposableInfoRepository composableInfoRepository;
@@ -42,16 +44,18 @@ public class CodeIndexingServiceImpl implements CodeIndexingService {
         // 이미 등록된 모듈앱을 다시 업로드하면 기존 데이터를 지우고 새로 분석
         deleteExistingIndex(appId);
 
-        // 2. ZIP 파일에서 Kotlin 소스 파일 추출
-        // ZipExtractorService가 .kt 파일만 필터링하여 추출
-        List<KotlinFileContentDTO> kotlinFiles = zipExtractorService.extractKotlinFiles(zipFile);
-        log.info("추출된 Kotlin 파일 개수: {}", kotlinFiles.size());
+        // 2. ZIP 파일에서 소스 파일 추출 (Kotlin + HTML 동시에)
+        Map<String, List<KotlinFileContentDTO>> extractedFiles = zipExtractorService.extractAllSourceFiles(zipFile);
+        List<KotlinFileContentDTO> kotlinFiles = extractedFiles.get("kotlin");
+        List<KotlinFileContentDTO> htmlFiles = extractedFiles.get("html");
 
-        // 3. 각 Kotlin 파일을 AST 파싱하여 UI 요소 추출
+        log.info("추출된 Kotlin 파일 개수: {}, HTML 파일 개수: {}", kotlinFiles.size(), htmlFiles.size());
+
         List<ComposableInfo> allComposables = new ArrayList<>();
+
+        // 3-1. Kotlin 파일 파싱
         for (KotlinFileContentDTO file : kotlinFiles) {
             try {
-                // 파일별로 AST 파싱 수행
                 // @Composable 함수를 찾아서 내부의 Button, Text 등 UI 요소 정보 추출
                 List<ComposableInfo> composables = kotlinASTParser.parseKotlinFile(
                     appId,
@@ -61,8 +65,23 @@ public class CodeIndexingServiceImpl implements CodeIndexingService {
                 allComposables.addAll(composables);
             } catch (Exception e) {
                 // 특정 파일 파싱 실패해도 전체 프로세스는 계속 진행
-                // 일부 파일에 문법 오류가 있어도 나머지 파일은 처리
-                log.warn("파일 파싱 실패 (계속 진행): fileName={}", file.getFileName(), e);
+                log.warn("Kotlin 파일 파싱 실패 (계속 진행): fileName={}", file.getFileName(), e);
+            }
+        }
+
+        // 3-2. HTML 파일 파싱
+        for (KotlinFileContentDTO file : htmlFiles) {
+            try {
+                // JSoup으로 button, input 등 HTML UI 요소 정보 추출
+                List<ComposableInfo> composables = htmlParser.parseHtmlFile(
+                    appId,
+                    file.getFileName(),
+                    file.getContent()
+                );
+                allComposables.addAll(composables);
+            } catch (Exception e) {
+                // 특정 파일 파싱 실패해도 전체 프로세스는 계속 진행
+                log.warn("HTML 파일 파싱 실패 (계속 진행): fileName={}", file.getFileName(), e);
             }
         }
 
@@ -127,7 +146,9 @@ public class CodeIndexingServiceImpl implements CodeIndexingService {
 
     /**
      * ComposableInfo 리스트를 화면명(Screen)별로 그룹화
-     * 파일명에서 화면명을 추출한다 (예: TransferScreen.kt -> TransferScreen)
+     * 파일명에서 화면명을 추출한다
+     * - Kotlin: TransferScreen.kt -> TransferScreen
+     * - HTML: pages/index/index.html -> index
      */
     private Map<String, List<ComposableInfo>> groupComposablesByScreen(List<ComposableInfo> composables) {
         return composables.stream()
@@ -143,8 +164,12 @@ public class CodeIndexingServiceImpl implements CodeIndexingService {
                     ? fileName.substring(fileName.lastIndexOf("/") + 1)
                     : fileName;
 
-                // 확장자 제거 (TransferScreen.kt -> TransferScreen)
-                return fileNameOnly.replace(".kt", "");
+                // 확장자 제거
+                // TransferScreen.kt -> TransferScreen
+                // index.html -> index
+                return fileNameOnly
+                    .replace(".kt", "")
+                    .replace(".html", "");
             }));
     }
 
