@@ -2,9 +2,11 @@ package anam_145.SpringBoot.Server.web.dto.AiGuideDTO;
 
 import lombok.*;
 
+import java.util.List;
+
 /**
  * AI 가이드 생성 응답 DTO
- * 프론트엔드에서 특정 UI 요소를 찾아 오버레이 말풍선을 표시하는데 필요한 정보를 담는다.
+ * 단계별 가이드 시퀀스를 배열 형태로 반환한다.
  */
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -13,26 +15,39 @@ import lombok.*;
 public class GuideResponseDTO {
 
     /**
-     * 타겟 화면명
-     * 예: "send", "receive", "index"
+     * 단계별 가이드 시퀀스
+     * 사용자 작업 완료를 위한 순차적 단계들
      */
+    private List<GuideStepDTO> steps;
+
+    // === 하위 호환성을 위한 단일 가이드 필드들 (Deprecated) ===
+
+    /**
+     * @deprecated steps 배열 사용 권장
+     * 타겟 화면명
+     */
+    @Deprecated
     private String targetScreen;
 
     /**
+     * @deprecated steps 배열 사용 권장
      * 타겟 UI 요소 정보
      */
+    @Deprecated
     private TargetElementDTO targetElement;
 
     /**
+     * @deprecated steps 배열 사용 권장
      * AI가 생성한 안내 메시지
-     * 예: "이 입력란에 받는 사람의 비트코인 주소를 입력하세요"
      */
+    @Deprecated
     private String guideMessage;
 
     /**
-     * 관련 코드 정보 (선택적, 디버깅용)
-     * 예: "onclick: confirmSend()"
+     * @deprecated steps 배열 사용 권장
+     * 관련 코드 정보
      */
+    @Deprecated
     private String relatedCode;
 
     /**
