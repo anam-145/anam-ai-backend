@@ -30,19 +30,19 @@ public class OpenAiClientService {
             @Value("${ai.openai.max-tokens:500}") Integer maxTokens,
             @Value("${ai.openai.temperature:0.7}") Double temperature
     ) {
+        // API 키 필수 검증
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("OpenAI API 키가 설정되지 않았습니다. application.yml에 ai.openai.api-key를 설정해주세요.");
+        }
+
         this.apiKey = apiKey;
         this.model = model;
         this.maxTokens = maxTokens;
         this.temperature = temperature;
 
-        // API 키가 설정되어 있으면 실제 클라이언트 생성, 없으면 null (mock 모드)
-        if (apiKey != null && !apiKey.isBlank()) {
-            this.openAiClient = new com.theokanning.openai.service.OpenAiService(apiKey, Duration.ofSeconds(60));
-            log.info("OpenAI API 클라이언트 초기화 완료: model={}", model);
-        } else {
-            this.openAiClient = null;
-            log.warn("OpenAI API 키가 설정되지 않음 - Mock 모드로 실행");
-        }
+        // OpenAI 클라이언트 초기화
+        this.openAiClient = new com.theokanning.openai.service.OpenAiService(apiKey, Duration.ofSeconds(60));
+        log.info("OpenAI API 클라이언트 초기화 완료: model={}", model);
     }
 
     /**
@@ -53,12 +53,6 @@ public class OpenAiClientService {
      * @return AI가 생성한 가이드 메시지
      */
     public String generateGuideMessage(String systemPrompt, String userPrompt) {
-        // API 키가 없으면 null 반환 (호출자가 mock 응답 생성)
-        if (openAiClient == null) {
-            log.debug("OpenAI API 키 없음 - null 반환");
-            return null;
-        }
-
         try {
             log.debug("OpenAI API 호출 시작: model={}", model);
 
@@ -83,12 +77,5 @@ public class OpenAiClientService {
             log.error("OpenAI API 호출 실패", e);
             throw new RuntimeException("LLM API 호출 중 오류 발생: " + e.getMessage(), e);
         }
-    }
-
-    /**
-     * API 키 설정 여부 확인
-     */
-    public boolean isApiKeyConfigured() {
-        return openAiClient != null;
     }
 }

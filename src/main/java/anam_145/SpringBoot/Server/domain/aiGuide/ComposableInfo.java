@@ -69,12 +69,21 @@ public class ComposableInfo {
 
     /**
      * UI 요소의 식별자
-     * Modifier.testTag()로 지정된 값이나 다른 고유 식별자를 저장한다.
-     * 예: "btn_send", "input_amount", "text_balance"
-     * 클라이언트에서 이 값을 사용하여 특정 UI 요소를 찾아 하이라이트할 수 있다.
+     * HTML: id 속성 값 (예: "send-btn")
+     * Kotlin: Modifier.testTag()로 지정된 값 (예: "btn_send")
+     * 클라이언트에서 #id 형식의 CSS 선택자로 사용한다.
      */
     @Column(name = "composable_id", length = 200)
     private String composableId;
+
+    /**
+     * 대체 CSS 선택자
+     * composableId가 없을 때 사용하는 CSS 선택자
+     * HTML: class 속성 기반 (예: ".action-btn")
+     * Kotlin: 기타 선택자
+     */
+    @Column(name = "fallback_selector", length = 200)
+    private String fallbackSelector;
 
     /**
      * UI 요소에 표시되는 텍스트

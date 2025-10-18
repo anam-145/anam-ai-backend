@@ -39,11 +39,16 @@ public class AiGuideController {
 
         GuideResponseDTO response = aiGuideService.generateGuide(request);
 
-        log.info("AI 가이드 생성 완료: targetScreen={}, targetElement={}",
-                response.getTargetScreen(),
-                response.getTargetElement() != null
-                        ? response.getTargetElement().getComposableId()
-                        : "null");
+        log.info("AI 가이드 생성 완료: appId={}, steps count={}",
+                response.getAppId(),
+                response.getSteps() != null ? response.getSteps().size() : 0);
+
+        if (response.getSteps() != null && !response.getSteps().isEmpty()) {
+            log.info("첫 번째 스텝: stepNumber={}, targetScreen={}, message={}",
+                    response.getSteps().get(0).getStepNumber(),
+                    response.getSteps().get(0).getTargetScreen(),
+                    response.getSteps().get(0).getGuideMessage());
+        }
 
         return ApiResponse.onSuccess(response);
     }

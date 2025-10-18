@@ -15,6 +15,12 @@ import java.util.List;
 public class GuideResponseDTO {
 
     /**
+     * 대상 미니앱 ID
+     * 어떤 미니앱을 실행할지 결정
+     */
+    private String appId;
+
+    /**
      * 단계별 가이드 시퀀스
      * 사용자 작업 완료를 위한 순차적 단계들
      */

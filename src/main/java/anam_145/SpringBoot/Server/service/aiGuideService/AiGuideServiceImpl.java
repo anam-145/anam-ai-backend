@@ -37,19 +37,34 @@ public class AiGuideServiceImpl implements AiGuideService {
         log.info("AI 가이드 생성 요청: appId={}, userQuestion={}",
                 request.getAppId(), request.getUserQuestion());
 
-        // 1. 사용자 질문에서 키워드 추출
-        String keyword = extractKeyword(request.getUserQuestion());
-        log.debug("추출된 키워드: {}", keyword);
+        // 1. appId가 비어있으면 질문으로부터 결정
+        String targetAppId = request.getAppId();
+        if (targetAppId == null || targetAppId.isBlank()) {
+            targetAppId = determineAppIdFromQuestion(request.getUserQuestion());
+            log.info("질문으로부터 appId 결정: {}", targetAppId);
+        }
 
-        // 2. DB에서 관련 UI 요소 다중 검색 (최대 10개)
+        // 2. DB에서 해당 앱의 모든 UI 요소 가져오기 (키워드 추출에 사용)
+        List<ComposableInfo> allElements = composableInfoRepository.findByAppId(targetAppId);
+
+        if (allElements.isEmpty()) {
+            log.warn("해당 appId의 UI 요소가 DB에 없음: {}", targetAppId);
+            return buildNoResultResponse(targetAppId);
+        }
+
+        // 3. DB 정보를 바탕으로 사용자 질문에서 키워드 추출
+        String keyword = extractKeywordWithContext(request.getUserQuestion(), allElements);
+        log.info("추출된 키워드: {}", keyword);
+
+        // 4. DB에서 관련 UI 요소 다중 검색 (최대 10개)
         List<ComposableInfo> matchedElements = composableInfoRepository.searchByKeyword(
-                request.getAppId(),
+                targetAppId,
                 keyword
         );
 
         if (matchedElements.isEmpty()) {
-            log.warn("검색 결과 없음: appId={}, keyword={}", request.getAppId(), keyword);
-            return buildNoResultResponse();
+            log.warn("검색 결과 없음: appId={}, keyword={}", targetAppId, keyword);
+            return buildNoResultResponse(targetAppId);
         }
 
         // 검색 결과를 최대 10개로 제한
@@ -62,27 +77,113 @@ public class AiGuideServiceImpl implements AiGuideService {
         // 3. LLM을 활용하여 단계별 시퀀스 생성
         List<GuideStepDTO> steps = generateStepSequence(request.getUserQuestion(), limitedElements);
 
-        if (steps.isEmpty()) {
-            // LLM 시퀀스 생성 실패 시 fallback: 첫 번째 요소로 단일 가이드 생성
-            log.warn("LLM 시퀀스 생성 실패, 단일 가이드로 fallback");
-            return buildSingleGuideFallback(limitedElements.get(0), request.getUserQuestion());
-        }
+        // steps가 비어있으면 예외 발생 (generateStepSequence에서 처리됨)
 
-        // 4. 응답 DTO 생성
+        // 4. 응답 DTO 생성 (appId 포함)
         return GuideResponseDTO.builder()
+                .appId(targetAppId)
                 .steps(steps)
                 .build();
     }
 
     /**
-     * 사용자 질문에서 핵심 키워드 추출
-     * 현재는 단순하게 전체 질문을 키워드로 사용
-     * 향후 NLP 라이브러리나 LLM을 활용해 개선 가능
+     * 사용자 질문으로부터 적절한 appId 결정
+     * 간단한 키워드 매칭 방식 사용 (향후 LLM 기반 분류로 개선 가능)
      */
-    private String extractKeyword(String userQuestion) {
-        // TODO: 형태소 분석 또는 LLM을 활용한 키워드 추출
-        // 현재는 전체 문장을 키워드로 사용
-        return userQuestion.trim();
+    private String determineAppIdFromQuestion(String userQuestion) {
+        String lowerQuestion = userQuestion.toLowerCase();
+
+        // BonMedia 관련 키워드
+        if (lowerQuestion.contains("본미디어") || lowerQuestion.contains("bonmedia")) {
+            return "com.anam.6nqxb5qfm5lptbc9";  // BonMedia appId
+        }
+
+        // Busanilbo 관련 키워드
+        if (lowerQuestion.contains("부산일보") || lowerQuestion.contains("busanilbo")) {
+            return "com.anam.vh7lpswl75iqdarh";  // Busanilbo appId
+        }
+
+        // 이더리움 관련 키워드 (비트코인보다 먼저 체크)
+        if (lowerQuestion.contains("이더리움") || lowerQuestion.contains("eth") ||
+            lowerQuestion.contains("ethereum")) {
+            return "com.anam.osba5s0oy5582dc0";  // Ethereum Wallet appId
+        }
+
+        // 비트코인 관련 키워드 (일반 키워드 제거)
+        if (lowerQuestion.contains("비트코인") || lowerQuestion.contains("btc") ||
+            lowerQuestion.contains("bitcoin")) {
+            return "com.anam.rehrxj11f38gn09k";  // Bitcoin Wallet appId
+        }
+
+        // 기본값: 첫 번째 미니앱
+        log.warn("질문으로부터 appId를 결정할 수 없음. 기본값 사용: {}", userQuestion);
+        return "com.anam.rehrxj11f38gn09k";  // 기본값으로 Bitcoin Wallet
+    }
+
+    /**
+     * DB 컨텍스트를 활용하여 사용자 질문에서 핵심 키워드 추출
+     * LLM에게 실제 DB에 존재하는 UI 요소 정보를 제공하여 더 정확한 키워드 추출
+     */
+    private String extractKeywordWithContext(String userQuestion, List<ComposableInfo> allElements) {
+        try {
+            // DB에서 고유한 composableId, text, type 수집 (샘플로 최대 30개)
+            StringBuilder dbContext = new StringBuilder();
+            dbContext.append("이 앱에서 사용 가능한 UI 요소들:\n");
+
+            int count = 0;
+            for (ComposableInfo elem : allElements) {
+                if (count >= 30) break; // 너무 많으면 LLM 컨텍스트 초과
+
+                String id = elem.getComposableId() != null ? elem.getComposableId() : "no-id";
+                String text = elem.getText() != null && !elem.getText().isEmpty() ? elem.getText() : "";
+                String type = elem.getType() != null ? elem.getType() : "";
+
+                dbContext.append(String.format("- %s (%s) %s\n", id, type, text));
+                count++;
+            }
+
+            String systemPrompt = """
+                    당신은 키워드 추출 전문가입니다.
+                    사용자의 한글 질문을 분석하여 UI 요소 검색에 적합한 키워드를 추출합니다.
+
+                    규칙:
+                    1. 제공된 UI 요소 목록을 참고하여 실제로 존재하는 요소와 관련된 키워드만 추출하세요
+                    2. 한글을 영어로 번역하세요 (예: "송금" -> "send", "받기" -> "receive")
+                    3. composableId, text, type 중 관련된 단어를 우선적으로 선택하세요
+                    4. 가장 관련성 높은 단일 키워드만 반환하세요 (여러 개 금지)
+                    5. 추가 설명 없이 키워드만 반환하세요
+
+                    예시:
+                    - "비트코인 송금하는 방법 알려줘" + UI에 "action-btn Send" 있음 -> "send"
+                    - "지갑 설정 어떻게 해?" + UI에 "settings-btn Settings" 있음 -> "settings"
+                    - "받는 주소 확인하고 싶어" + UI에 "copy-btn receive" 있음 -> "receive"
+                    """;
+
+            String userPrompt = dbContext.toString() + "\n질문: \"" + userQuestion + "\"\n\n가장 관련성 높은 키워드 하나:";
+
+            String keyword = openAiClientService.generateGuideMessage(systemPrompt, userPrompt);
+
+            if (keyword != null && !keyword.isBlank()) {
+                // 여러 단어가 반환되면 첫 번째 단어만 사용
+                String cleanedKeyword = keyword.trim().split("\\s+")[0];
+                log.info("LLM 키워드 추출: \"{}\" -> \"{}\"", userQuestion, cleanedKeyword);
+                return cleanedKeyword;
+            }
+        } catch (Exception e) {
+            log.warn("LLM 키워드 추출 실패, 기본 키워드 사용: {}", e.getMessage());
+        }
+
+        // LLM 실패 시 질문에서 간단한 키워드 추론
+        String lowerQuestion = userQuestion.toLowerCase();
+        if (lowerQuestion.contains("송금") || lowerQuestion.contains("보내")) {
+            return "send";
+        } else if (lowerQuestion.contains("받") || lowerQuestion.contains("주소")) {
+            return "receive";
+        } else if (lowerQuestion.contains("설정")) {
+            return "settings";
+        }
+
+        return "send"; // 기본값
     }
 
     /**
@@ -100,8 +201,7 @@ public class AiGuideServiceImpl implements AiGuideService {
             String llmResponse = openAiClientService.generateGuideMessage(systemPrompt, userPrompt);
 
             if (llmResponse == null || llmResponse.isBlank()) {
-                log.warn("LLM 응답 없음, mock 모드 사용");
-                return generateMockSequence(elements);
+                throw new RuntimeException("LLM 응답이 비어있습니다.");
             }
 
             // 3. JSON 파싱
@@ -109,8 +209,7 @@ public class AiGuideServiceImpl implements AiGuideService {
 
             // 4. 단계 검증
             if (steps.isEmpty()) {
-                log.warn("LLM 응답 파싱 결과 빈 배열");
-                return generateMockSequence(elements);
+                throw new RuntimeException("LLM 응답 파싱 결과 빈 배열입니다.");
             }
 
             validateStepSequence(steps);
@@ -118,7 +217,7 @@ public class AiGuideServiceImpl implements AiGuideService {
 
         } catch (Exception e) {
             log.error("LLM 시퀀스 생성 중 예외 발생", e);
-            return generateMockSequence(elements);
+            throw new RuntimeException("AI 가이드 생성 실패: " + e.getMessage(), e);
         }
     }
 
@@ -182,58 +281,6 @@ public class AiGuideServiceImpl implements AiGuideService {
     }
 
     /**
-     * LLM 호출하여 안내 메시지 생성
-     * OpenAI API를 사용하며, API 키가 없으면 mock 응답 반환
-     */
-    private String callLLM(String prompt, ComposableInfo element) {
-        // 시스템 프롬프트 정의
-        String systemPrompt = """
-                당신은 미니앱 UI 가이드 전문가입니다.
-                사용자가 미니앱을 사용할 때 UI 요소를 쉽게 찾고 사용할 수 있도록 친절하고 간결하게 안내합니다.
-                1-2문장으로 핵심만 전달하며, 존댓말을 사용합니다.
-                """;
-
-        // OpenAI API 호출 시도
-        String llmResponse = openAiClientService.generateGuideMessage(systemPrompt, prompt);
-
-        // API 키가 없으면 null 반환 → mock 응답 사용
-        if (llmResponse == null) {
-            log.warn("OpenAI API 키 미설정 - mock 응답 사용");
-            return generateMockResponse(element);
-        }
-
-        return llmResponse;
-    }
-
-    /**
-     * Mock 응답 생성 (OpenAI API 키가 없을 때 사용)
-     */
-    private String generateMockResponse(ComposableInfo element) {
-        String type = element.getType();
-        String text = element.getText();
-        String onClick = element.getOnClickCode();
-
-        if (type.equals("Button") && onClick != null) {
-            return String.format("이 '%s' 버튼을 누르면 %s 기능이 실행됩니다.",
-                    text != null && !text.isEmpty() ? text : "버튼",
-                    onClick.replace("()", "").replace("navigate", "이동")
-            );
-        } else if (type.startsWith("Input")) {
-            return String.format("이 입력란에 %s을(를) 입력하세요.",
-                    text != null ? text : "값"
-            );
-        } else if (type.equals("Textarea")) {
-            return String.format("이 텍스트 영역에 %s을(를) 입력하세요.",
-                    text != null ? text : "내용"
-            );
-        } else if (type.equals("Select")) {
-            return "이 드롭다운 메뉴에서 원하는 옵션을 선택하세요.";
-        }
-
-        return "이 UI 요소를 사용하여 원하는 작업을 수행하세요.";
-    }
-
-    /**
      * LLM JSON 응답 파싱하여 GuideStepDTO 리스트 생성
      */
     private List<GuideStepDTO> parseStepsFromLLMResponse(String llmResponse, List<ComposableInfo> elements) {
@@ -293,7 +340,7 @@ public class AiGuideServiceImpl implements AiGuideService {
         // TargetElementDTO 생성
         GuideResponseDTO.TargetElementDTO targetElementDTO = GuideResponseDTO.TargetElementDTO.builder()
                 .composableId(element.getComposableId())
-                .fallbackSelector(element.getModifierCode())
+                .fallbackSelector(element.getFallbackSelector())  // 수정: modifierCode → fallbackSelector
                 .type(element.getType())
                 .text(element.getText())
                 .build();
@@ -344,7 +391,13 @@ public class AiGuideServiceImpl implements AiGuideService {
     }
 
     /**
-     * onClickCode에서 nextScreen 추출 (navigateTo('page') 패턴)
+     * onClickCode에서 nextScreen 추출
+     *
+     * 지원 패턴:
+     * - navigateTo('page') → page
+     * - navigateToSend() → send
+     * - navigateToReceive() → receive
+     * - navigateToSettings() → settings
      */
     private String extractNextScreen(String onClickCode) {
         if (onClickCode == null || onClickCode.isBlank()) {
@@ -352,11 +405,18 @@ public class AiGuideServiceImpl implements AiGuideService {
         }
 
         // navigateTo('wallet') → wallet 추출
-        Pattern pattern = Pattern.compile("navigateTo\\(['\"]([^'\"]+)['\"]\\)");
-        Matcher matcher = pattern.matcher(onClickCode);
+        Pattern pattern1 = Pattern.compile("navigateTo\\(['\"]([^'\"]+)['\"]\\)");
+        Matcher matcher1 = pattern1.matcher(onClickCode);
+        if (matcher1.find()) {
+            return matcher1.group(1);
+        }
 
-        if (matcher.find()) {
-            return matcher.group(1);
+        // navigateToXxx() → xxx 추출 (camelCase to lowercase)
+        Pattern pattern2 = Pattern.compile("navigateTo([A-Z][a-zA-Z]*)\\(");
+        Matcher matcher2 = pattern2.matcher(onClickCode);
+        if (matcher2.find()) {
+            String screenName = matcher2.group(1);
+            return screenName.toLowerCase(); // Send → send, Settings → settings
         }
 
         return null;
@@ -382,58 +442,11 @@ public class AiGuideServiceImpl implements AiGuideService {
     }
 
     /**
-     * Mock 시퀀스 생성 (LLM 실패 시 fallback)
-     */
-    private List<GuideStepDTO> generateMockSequence(List<ComposableInfo> elements) {
-        List<GuideStepDTO> steps = new ArrayList<>();
-
-        // 최대 3개 요소만 사용
-        int limit = Math.min(3, elements.size());
-
-        for (int i = 0; i < limit; i++) {
-            ComposableInfo element = elements.get(i);
-            String message = generateMockMessage(element);
-
-            GuideStepDTO step = buildStepDTO(i + 1, element, message);
-            steps.add(step);
-        }
-
-        return steps;
-    }
-
-    /**
-     * Mock 메시지 생성
-     */
-    private String generateMockMessage(ComposableInfo element) {
-        String type = element.getType();
-        String text = element.getText();
-
-        if (type.equals("Button")) {
-            return String.format("'%s' 버튼을 누르세요.", text != null ? text : "버튼");
-        } else if (type.startsWith("Input")) {
-            return String.format("이 입력란에 %s을(를) 입력하세요.", text != null ? text : "값");
-        }
-
-        return "이 단계를 진행하세요.";
-    }
-
-    /**
-     * 단일 가이드 fallback (하위 호환성)
-     */
-    private GuideResponseDTO buildSingleGuideFallback(ComposableInfo element, String userQuestion) {
-        String message = generateMockMessage(element);
-        GuideStepDTO singleStep = buildStepDTO(1, element, message);
-
-        return GuideResponseDTO.builder()
-                .steps(List.of(singleStep))
-                .build();
-    }
-
-    /**
      * 검색 결과 없을 때 응답
      */
-    private GuideResponseDTO buildNoResultResponse() {
+    private GuideResponseDTO buildNoResultResponse(String appId) {
         return GuideResponseDTO.builder()
+                .appId(appId)
                 .steps(new ArrayList<>())
                 .build();
     }

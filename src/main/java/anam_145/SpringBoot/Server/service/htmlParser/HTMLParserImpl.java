@@ -72,10 +72,13 @@ public class HTMLParserImpl implements HTMLParser {
         Elements buttonElements = doc.select("button");
 
         for (Element button : buttonElements) {
+            String[] idAndFallback = extractIdAndFallback(button);
+
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type("Button") // UI 요소 타입
-                    .composableId(extractId(button)) // id 또는 data-* 속성
+                    .composableId(idAndFallback[0]) // id 속성만 (없으면 null)
+                    .fallbackSelector(idAndFallback[1]) // class 선택자 등 (없으면 null)
                     .text(button.text()) // 버튼 라벨 텍스트
                     .semanticHint(extractSemanticHint(button)) // title, aria-label 등
                     .onClickCode(extractOnClick(button)) // onclick 이벤트 핸들러
@@ -99,11 +102,13 @@ public class HTMLParserImpl implements HTMLParser {
 
         for (Element input : inputElements) {
             String inputType = input.attr("type"); // text, password, checkbox 등
+            String[] idAndFallback = extractIdAndFallback(input);
 
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type("Input_" + (inputType.isEmpty() ? "text" : inputType)) // Input_text, Input_password 등
-                    .composableId(extractId(input))
+                    .composableId(idAndFallback[0])
+                    .fallbackSelector(idAndFallback[1])
                     .text(input.attr("placeholder")) // placeholder를 텍스트로 사용
                     .semanticHint(extractSemanticHint(input))
                     .onClickCode(extractOnClick(input))
@@ -126,10 +131,13 @@ public class HTMLParserImpl implements HTMLParser {
         Elements linkElements = doc.select("a");
 
         for (Element link : linkElements) {
+            String[] idAndFallback = extractIdAndFallback(link);
+
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type("Link")
-                    .composableId(extractId(link))
+                    .composableId(idAndFallback[0])
+                    .fallbackSelector(idAndFallback[1])
                     .text(link.text()) // 링크 텍스트
                     .semanticHint(link.attr("href")) // href를 semantic hint로 사용
                     .onClickCode(extractOnClick(link))
@@ -152,10 +160,13 @@ public class HTMLParserImpl implements HTMLParser {
         Elements formElements = doc.select("form");
 
         for (Element form : formElements) {
+            String[] idAndFallback = extractIdAndFallback(form);
+
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type("Form")
-                    .composableId(extractId(form))
+                    .composableId(idAndFallback[0])
+                    .fallbackSelector(idAndFallback[1])
                     .text(null) // form은 텍스트 없음
                     .semanticHint(form.attr("action")) // action 속성
                     .onClickCode(extractOnSubmit(form)) // onsubmit 이벤트
@@ -178,10 +189,13 @@ public class HTMLParserImpl implements HTMLParser {
         Elements textareaElements = doc.select("textarea");
 
         for (Element textarea : textareaElements) {
+            String[] idAndFallback = extractIdAndFallback(textarea);
+
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type("Textarea")
-                    .composableId(extractId(textarea))
+                    .composableId(idAndFallback[0])
+                    .fallbackSelector(idAndFallback[1])
                     .text(textarea.attr("placeholder"))
                     .semanticHint(extractSemanticHint(textarea))
                     .onClickCode(null)
@@ -204,6 +218,8 @@ public class HTMLParserImpl implements HTMLParser {
         Elements selectElements = doc.select("select");
 
         for (Element select : selectElements) {
+            String[] idAndFallback = extractIdAndFallback(select);
+
             // select의 option들을 텍스트로 결합
             StringBuilder optionsText = new StringBuilder();
             Elements options = select.select("option");
@@ -214,7 +230,8 @@ public class HTMLParserImpl implements HTMLParser {
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type("Select")
-                    .composableId(extractId(select))
+                    .composableId(idAndFallback[0])
+                    .fallbackSelector(idAndFallback[1])
                     .text(optionsText.toString())
                     .semanticHint(extractSemanticHint(select))
                     .onClickCode(null)
@@ -255,10 +272,13 @@ public class HTMLParserImpl implements HTMLParser {
                 }
             });
 
+            String[] idAndFallback = extractIdAndFallback(element);
+
             ComposableInfo info = ComposableInfo.builder()
                     .appId(appId)
                     .type(capitalizeFirst(tagName)) // Div, Span 등
-                    .composableId(extractId(element))
+                    .composableId(idAndFallback[0])
+                    .fallbackSelector(idAndFallback[1])
                     .text(element.text())
                     .semanticHint(dataAttrs.toString())
                     .onClickCode(extractOnClick(element))
@@ -274,50 +294,64 @@ public class HTMLParserImpl implements HTMLParser {
     }
 
     /**
-     * 요소의 ID를 추출
-     * 우선순위: id > data-testid > data-id > data-target > class 첫 번째 값 > tagName + text 조합
+     * 요소의 ID와 fallback selector를 추출
      *
-     * HTML 요소의 고유 식별자를 추출한다.
-     * 프론트엔드에서 querySelector로 요소를 찾을 수 있도록 fallback 로직을 제공한다.
+     * composableId 우선순위: id > data-testid > data-id > data-target
+     * fallbackSelector 우선순위: class > tagName + text
+     *
+     * @return String[] - [0]: composableId (id 속성만), [1]: fallbackSelector (class 등)
      */
-    private String extractId(Element element) {
-        // 1순위: id 속성
-        String id = element.id();
-        if (!id.isEmpty()) return id;
+    private String[] extractIdAndFallback(Element element) {
+        String composableId = null;
+        String fallbackSelector = null;
 
-        // 2순위: data-testid 속성 (테스트 자동화용 ID)
+        // 1순위: id 속성 (실제 HTML id만)
+        String id = element.id();
+        if (!id.isEmpty()) {
+            composableId = id;
+            return new String[]{composableId, null};
+        }
+
+        // 2순위: data-testid 속성
         String testId = element.attr("data-testid");
-        if (!testId.isEmpty()) return testId;
+        if (!testId.isEmpty()) {
+            composableId = testId;
+            return new String[]{composableId, null};
+        }
 
         // 3순위: data-id 속성
         String dataId = element.attr("data-id");
-        if (!dataId.isEmpty()) return dataId;
+        if (!dataId.isEmpty()) {
+            composableId = dataId;
+            return new String[]{composableId, null};
+        }
 
         // 4순위: data-target 속성
         String target = element.attr("data-target");
-        if (!target.isEmpty()) return target;
+        if (!target.isEmpty()) {
+            composableId = target;
+            return new String[]{composableId, null};
+        }
 
-        // 5순위: class 첫 번째 값 (가장 구체적인 클래스명 사용)
-        // 예: "send-btn action-btn" → "send-btn"
+        // 5순위: class를 fallback selector로 저장 (composableId는 null)
         String className = element.className();
         if (!className.isEmpty()) {
             String firstClass = className.split("\\s+")[0];
-            return firstClass;
+            fallbackSelector = "." + firstClass;  // CSS 선택자 형식
+            return new String[]{null, fallbackSelector};
         }
 
-        // 6순위: tagName + text 조합 (최후의 수단)
-        // 예: <button>Send</button> → "button_Send"
+        // 6순위: tagName + text 조합을 fallback으로
         String tagName = element.tagName();
         String text = element.text();
         if (!text.isEmpty()) {
-            // 공백을 언더스코어로 치환하고 최대 20자까지만 사용
             String sanitizedText = text.replaceAll("\\s+", "_");
             int maxLength = Math.min(20, sanitizedText.length());
-            return tagName + "_" + sanitizedText.substring(0, maxLength);
+            fallbackSelector = tagName + "_" + sanitizedText.substring(0, maxLength);
+            return new String[]{null, fallbackSelector};
         }
 
-        // 모든 fallback 실패 시 null 반환
-        return null;
+        return new String[]{null, null};
     }
 
     /**
