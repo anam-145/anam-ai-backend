@@ -44,7 +44,7 @@ public class AiGuideServiceImpl implements AiGuideService {
             log.info("질문으로부터 appId 결정: {}", targetAppId);
         }
 
-        // 2. DB에서 해당 앱의 모든 UI 요소 가져오기 (키워드 추출에 사용)
+        // 2. DB에서 해당 앱의 모든 UI 요소 가져오기
         List<ComposableInfo> allElements = composableInfoRepository.findByAppId(targetAppId);
 
         if (allElements.isEmpty()) {
@@ -52,30 +52,10 @@ public class AiGuideServiceImpl implements AiGuideService {
             return buildNoResultResponse(targetAppId);
         }
 
-        // 3. DB 정보를 바탕으로 사용자 질문에서 키워드 추출
-        String keyword = extractKeywordWithContext(request.getUserQuestion(), allElements);
-        log.info("추출된 키워드: {}", keyword);
+        log.info("조회된 UI 요소 개수: {}", allElements.size());
 
-        // 4. DB에서 관련 UI 요소 다중 검색 (최대 10개)
-        List<ComposableInfo> matchedElements = composableInfoRepository.searchByKeyword(
-                targetAppId,
-                keyword
-        );
-
-        if (matchedElements.isEmpty()) {
-            log.warn("검색 결과 없음: appId={}, keyword={}", targetAppId, keyword);
-            return buildNoResultResponse(targetAppId);
-        }
-
-        // 검색 결과를 최대 10개로 제한
-        List<ComposableInfo> limitedElements = matchedElements.size() > 10
-                ? matchedElements.subList(0, 10)
-                : matchedElements;
-
-        log.info("매칭된 UI 요소 개수: {}", limitedElements.size());
-
-        // 3. LLM을 활용하여 단계별 시퀀스 생성
-        List<GuideStepDTO> steps = generateStepSequence(request.getUserQuestion(), limitedElements);
+        // 3. LLM을 활용하여 전체 UI 요소에서 적합한 요소 선택 및 단계별 시퀀스 생성
+        List<GuideStepDTO> steps = generateStepSequence(request.getUserQuestion(), allElements);
 
         // steps가 비어있으면 예외 발생 (generateStepSequence에서 처리됨)
 
@@ -115,76 +95,17 @@ public class AiGuideServiceImpl implements AiGuideService {
             return "com.anam.rehrxj11f38gn09k";  // Bitcoin Wallet appId
         }
 
+        // 이락 관련 키워드 (일반 키워드 제거)
+        if (lowerQuestion.contains("이락코인") || lowerQuestion.contains("이락") ||
+                lowerQuestion.contains("iraccoin")) {
+            return "com.anam.rehrxj11f38gn09k";  // Bitcoin Wallet appId
+        }
+
         // 기본값: 첫 번째 미니앱
         log.warn("질문으로부터 appId를 결정할 수 없음. 기본값 사용: {}", userQuestion);
         return "com.anam.rehrxj11f38gn09k";  // 기본값으로 Bitcoin Wallet
     }
 
-    /**
-     * DB 컨텍스트를 활용하여 사용자 질문에서 핵심 키워드 추출
-     * LLM에게 실제 DB에 존재하는 UI 요소 정보를 제공하여 더 정확한 키워드 추출
-     */
-    private String extractKeywordWithContext(String userQuestion, List<ComposableInfo> allElements) {
-        try {
-            // DB에서 고유한 composableId, text, type 수집 (샘플로 최대 30개)
-            StringBuilder dbContext = new StringBuilder();
-            dbContext.append("이 앱에서 사용 가능한 UI 요소들:\n");
-
-            int count = 0;
-            for (ComposableInfo elem : allElements) {
-                if (count >= 30) break; // 너무 많으면 LLM 컨텍스트 초과
-
-                String id = elem.getComposableId() != null ? elem.getComposableId() : "no-id";
-                String text = elem.getText() != null && !elem.getText().isEmpty() ? elem.getText() : "";
-                String type = elem.getType() != null ? elem.getType() : "";
-
-                dbContext.append(String.format("- %s (%s) %s\n", id, type, text));
-                count++;
-            }
-
-            String systemPrompt = """
-                    당신은 키워드 추출 전문가입니다.
-                    사용자의 한글 질문을 분석하여 UI 요소 검색에 적합한 키워드를 추출합니다.
-
-                    규칙:
-                    1. 제공된 UI 요소 목록을 참고하여 실제로 존재하는 요소와 관련된 키워드만 추출하세요
-                    2. 한글을 영어로 번역하세요 (예: "송금" -> "send", "받기" -> "receive")
-                    3. composableId, text, type 중 관련된 단어를 우선적으로 선택하세요
-                    4. 가장 관련성 높은 단일 키워드만 반환하세요 (여러 개 금지)
-                    5. 추가 설명 없이 키워드만 반환하세요
-
-                    예시:
-                    - "비트코인 송금하는 방법 알려줘" + UI에 "action-btn Send" 있음 -> "send"
-                    - "지갑 설정 어떻게 해?" + UI에 "settings-btn Settings" 있음 -> "settings"
-                    - "받는 주소 확인하고 싶어" + UI에 "copy-btn receive" 있음 -> "receive"
-                    """;
-
-            String userPrompt = dbContext.toString() + "\n질문: \"" + userQuestion + "\"\n\n가장 관련성 높은 키워드 하나:";
-
-            String keyword = openAiClientService.generateGuideMessage(systemPrompt, userPrompt);
-
-            if (keyword != null && !keyword.isBlank()) {
-                // 여러 단어가 반환되면 첫 번째 단어만 사용
-                String cleanedKeyword = keyword.trim().split("\\s+")[0];
-                log.info("LLM 키워드 추출: \"{}\" -> \"{}\"", userQuestion, cleanedKeyword);
-                return cleanedKeyword;
-            }
-        } catch (Exception e) {
-            log.warn("LLM 키워드 추출 실패, 기본 키워드 사용: {}", e.getMessage());
-        }
-
-        // LLM 실패 시 질문에서 간단한 키워드 추론
-        String lowerQuestion = userQuestion.toLowerCase();
-        if (lowerQuestion.contains("송금") || lowerQuestion.contains("보내")) {
-            return "send";
-        } else if (lowerQuestion.contains("받") || lowerQuestion.contains("주소")) {
-            return "receive";
-        } else if (lowerQuestion.contains("설정")) {
-            return "settings";
-        }
-
-        return "send"; // 기본값
-    }
 
     /**
      * LLM을 활용하여 단계별 시퀀스 생성
@@ -227,13 +148,19 @@ public class AiGuideServiceImpl implements AiGuideService {
     private String buildSystemPromptForSequence() {
         return """
                 당신은 미니앱 UI 가이드 전문가입니다.
-                사용자의 목표를 달성하기 위한 단계별 가이드를 생성합니다.
+                사용자의 질문을 분석하여 목표를 달성하기 위한 단계별 가이드를 생성합니다.
 
                 규칙:
-                1. 각 단계는 논리적 순서로 정렬되어야 합니다.
-                2. 사용자가 따라가기 쉬워야 합니다.
-                3. 간결하고 친절한 한국어로 작성하세요.
-                4. 응답은 반드시 JSON 형식이어야 합니다.
+                1. 제공된 모든 UI 요소 중에서 사용자 질문과 의미적으로 관련된 요소만 선택하세요.
+                2. 선택된 요소들을 논리적 순서로 정렬하여 단계별 가이드를 생성하세요.
+                3. 각 단계는 사용자가 따라가기 쉬워야 합니다.
+                4. 간결하고 친절한 한국어로 작성하세요.
+                5. 응답은 반드시 JSON 형식이어야 합니다.
+
+                예시:
+                - 질문: "비트코인 키 어디서 봐?" → "Export Private Key" 버튼 선택
+                - 질문: "송금하고 싶어" → "Send" 또는 "Transfer" 버튼 선택
+                - 질문: "주소 복사하고 싶어" → "Copy" 버튼 선택
                 """;
     }
 
@@ -243,24 +170,26 @@ public class AiGuideServiceImpl implements AiGuideService {
     private String buildUserPromptForSequence(String userQuestion, List<ComposableInfo> elements) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("사용자 질문: \"").append(userQuestion).append("\"\n\n");
-        prompt.append("관련 UI 요소들:\n");
+        prompt.append("미니앱의 모든 UI 요소들:\n");
 
         for (int i = 0; i < elements.size(); i++) {
             ComposableInfo elem = elements.get(i);
             prompt.append(String.format(
-                    "%d. [%s 페이지] %s (%s, text: \"%s\", onClick: %s)\n",
-                    i + 1,
+                    "%d. [%s 페이지] %s (타입: %s, 텍스트: \"%s\", 검색가능텍스트: \"%s\", onClick: %s)\n",
+                    i,
                     elem.getScreenInfo() != null ? elem.getScreenInfo().getName() : "Unknown",
                     elem.getComposableId() != null ? elem.getComposableId() : "no-id",
                     elem.getType(),
                     elem.getText() != null ? elem.getText() : "",
+                    elem.getSearchableText() != null ? elem.getSearchableText() : "",
                     elem.getOnClickCode() != null ? elem.getOnClickCode() : "none"
             ));
         }
 
         prompt.append("""
 
-                위 요소들을 논리적 순서로 정렬하여 단계별 가이드를 JSON 형식으로 생성하세요.
+                위 모든 UI 요소 중에서 사용자 질문과 관련된 요소들을 의미적으로 선택하고,
+                논리적 순서로 정렬하여 단계별 가이드를 JSON 형식으로 생성하세요.
 
                 응답 형식:
                 {
@@ -274,7 +203,14 @@ public class AiGuideServiceImpl implements AiGuideService {
                   ]
                 }
 
-                주의: elementIndex는 위 목록의 인덱스(0부터 시작)입니다.
+                주의:
+                1. elementIndex는 위 목록의 인덱스(0부터 시작)입니다.
+                2. 사용자 질문의 의도를 파악하여 적합한 요소만 선택하세요.
+                3. 텍스트나 검색가능텍스트에서 의미가 유사한 요소를 찾으세요.
+                4. **중요: 목표 요소가 현재 메인 페이지가 아닌 다른 페이지에 있다면,
+                   반드시 그 페이지로 이동하는 버튼을 먼저 단계에 포함시키세요.**
+                   - 각 페이지의 요소들을 확인하여 논리적인 네비게이션 경로를 구성하세요.
+                   - 같은 페이지 내의 요소들은 순차적으로 안내하세요.
                 """);
 
         return prompt.toString();
