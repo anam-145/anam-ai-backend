@@ -68,42 +68,117 @@ public class AiGuideServiceImpl implements AiGuideService {
 
     /**
      * 사용자 질문으로부터 적절한 appId 결정
-     * 간단한 키워드 매칭 방식 사용 (향후 LLM 기반 분류로 개선 가능)
+     * 하이브리드 방식: 명확한 키워드는 즉시 매칭, 불명확하면 LLM 호출
      */
     private String determineAppIdFromQuestion(String userQuestion) {
         String lowerQuestion = userQuestion.toLowerCase();
 
         // BonMedia 관련 키워드
-        if (lowerQuestion.contains("본미디어") || lowerQuestion.contains("bonmedia")) {
+        if (lowerQuestion.contains("본미디어") || lowerQuestion.contains("bonmedia") ||
+            lowerQuestion.contains("뉴스") || lowerQuestion.contains("기사")) {
             return "com.anam.6nqxb5qfm5lptbc9";  // BonMedia appId
         }
 
         // Busanilbo 관련 키워드
-        if (lowerQuestion.contains("부산일보") || lowerQuestion.contains("busanilbo")) {
+        if (lowerQuestion.contains("부산일보") || lowerQuestion.contains("busanilbo") ||
+            lowerQuestion.contains("부산")) {
             return "com.anam.vh7lpswl75iqdarh";  // Busanilbo appId
         }
 
         // 이더리움 관련 키워드 (비트코인보다 먼저 체크)
         if (lowerQuestion.contains("이더리움") || lowerQuestion.contains("eth") ||
-            lowerQuestion.contains("ethereum")) {
+            lowerQuestion.contains("ethereum") || lowerQuestion.contains("이더")) {
             return "com.anam.osba5s0oy5582dc0";  // Ethereum Wallet appId
         }
 
-        // 비트코인 관련 키워드 (일반 키워드 제거)
+        // 비트코인 관련 키워드
         if (lowerQuestion.contains("비트코인") || lowerQuestion.contains("btc") ||
             lowerQuestion.contains("bitcoin")) {
             return "com.anam.rehrxj11f38gn09k";  // Bitcoin Wallet appId
         }
 
-        // 이락 관련 키워드 (일반 키워드 제거)
+        // 이락 관련 키워드
         if (lowerQuestion.contains("이락코인") || lowerQuestion.contains("이락") ||
                 lowerQuestion.contains("iraccoin")) {
             return "com.anam.rehrxj11f38gn09k";  // Bitcoin Wallet appId
         }
 
-        // 기본값: 첫 번째 미니앱
-        log.warn("질문으로부터 appId를 결정할 수 없음. 기본값 사용: {}", userQuestion);
-        return "com.anam.rehrxj11f38gn09k";  // 기본값으로 Bitcoin Wallet
+        // 불명확한 경우 LLM에게 물어보기
+        log.info("명확한 키워드 없음. LLM으로 appId 결정: {}", userQuestion);
+        return determineAppIdWithLLM(userQuestion);
+    }
+
+    /**
+     * LLM을 활용하여 사용자 질문으로부터 적절한 appId 결정
+     * 동의어, 불명확한 표현, 맥락 이해 지원
+     */
+    private String determineAppIdWithLLM(String userQuestion) {
+        try {
+            String systemPrompt = """
+                    당신은 미니앱 선택 전문가입니다.
+                    사용자 질문을 분석하여 가장 적절한 미니앱 ID를 반환하세요.
+
+                    사용 가능한 미니앱 목록:
+                    1. com.anam.rehrxj11f38gn09k
+                       - 이름: Bitcoin Wallet
+                       - 설명: 비트코인 블록체인 지갑
+
+                    2. com.anam.osba5s0oy5582dc0
+                       - 이름: Ethereum Wallet
+                       - 설명: 이더리움 블록체인 지갑
+
+                    3. com.anam.6nqxb5qfm5lptbc9
+                       - 이름: BonMedia
+                       - 설명: 뉴스/미디어 콘텐츠 서비스
+
+                    4. com.anam.vh7lpswl75iqdarh
+                       - 이름: Busanilbo
+                       - 설명: 부산 지역 뉴스 서비스
+
+                    블록체인 지갑 공통 기능:
+                    - 송금 (보내기, 전송, transfer, send)
+                    - 받기 (입금, 수신, receive, deposit)
+                    - 잔액 조회 (balance, 잔고)
+                    - 주소 확인 및 복사
+                    - 거래 내역 (transaction history)
+                    - 설정 (settings, 프라이빗 키, 시드 구문)
+
+                    규칙:
+                    1. 질문에서 명시된 암호화폐나 서비스 이름을 찾으세요
+                    2. 동의어와 약어도 고려하세요 (예: "이더" = Ethereum, "코인" = 암호화폐)
+                    3. 블록체인 공통 기능(송금, 받기 등)이면서 특정 코인이 명시되지 않은 경우 기본값 사용
+                    4. 불명확하거나 일반적인 암호화폐 관련 질문이면 기본값: com.anam.rehrxj11f38gn09k
+                    5. **반드시 appId만 반환하세요. 설명이나 추가 텍스트 없이 appId만 출력하세요.**
+
+                    예시:
+                    - "이더 보내기" → com.anam.osba5s0oy5582dc0
+                    - "이더리움 받기" → com.anam.osba5s0oy5582dc0
+                    - "암호화폐 송금" → com.anam.rehrxj11f38gn09k
+                    - "코인 받기" → com.anam.rehrxj11f38gn09k
+                    - "부산 뉴스" → com.anam.vh7lpswl75iqdarh
+                    """;
+
+            String userPrompt = "질문: \"" + userQuestion + "\"\n\n적절한 appId:";
+
+            String appId = openAiClientService.generateGuideMessage(systemPrompt, userPrompt);
+
+            if (appId == null || appId.isBlank()) {
+                log.warn("LLM이 appId를 반환하지 않음. 기본값 사용");
+                return "com.anam.rehrxj11f38gn09k";
+            }
+
+            // 응답 정리 (앞뒤 공백, 따옴표, 설명 제거)
+            String cleanedAppId = appId.trim()
+                    .replaceAll("^['\"]|['\"]$", "")  // 따옴표 제거
+                    .split("\\s")[0];  // 첫 번째 단어만 (설명 제거)
+
+            log.info("LLM appId 결정: \"{}\" -> {}", userQuestion, cleanedAppId);
+            return cleanedAppId;
+
+        } catch (Exception e) {
+            log.error("LLM appId 결정 실패, 기본값 사용: {}", e.getMessage());
+            return "com.anam.rehrxj11f38gn09k";  // 기본값
+        }
     }
 
 
